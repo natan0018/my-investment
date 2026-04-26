@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 from datetime import datetime, date
 
 # --- CONFIG ---
-SHEET_URL = "הכנס_כאן_את_הקישור_שלך" 
+SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTLlubNZGApf3LWUI3n0hRN6SNkyBdJmvNltHv_lLOO5FiAnnPG5NjvUAGRGE15N0sJ4q0VPFd_TjrE/pub?output=csv" 
 FX_API_URL = "https://open.er-api.com/v6/latest/USD"
 BANK_DEPOSIT_START = date(2026, 3, 16)
 BANK_DEPOSIT_PRINCIPAL = 230000
