@@ -6,7 +6,7 @@ from datetime import datetime, date
 
 # --- CONFIG ---
 # חשוב: הדבק כאן את הקישור המלא שמתחיל ב-https ומסתיים ב-output=csv
-SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSPhf_REPLACEME_WITH_YOUR_ACTUAL_LINK/pub?output=csv" 
+SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTLlubNZGApf3LWUI3n0hRN6SNkyBdJmvNltHv_lLOO5FiAnnPG5NjvUAGRGE15N0sJ4q0VPFd_TjrE/pub?output=csv" 
 
 FX_API_URL = "https://open.er-api.com/v6/latest/USD"
 BANK_DEPOSIT_START = date(2026, 3, 16)
