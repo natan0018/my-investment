@@ -4,6 +4,7 @@ import requests
 import json
 import plotly.express as px
 import plotly.graph_objects as go
+import yfinance as yf
 from datetime import datetime, date
 
 # --- CONFIG ---
@@ -13,16 +14,15 @@ BANK_DEPOSIT_START = date(2026, 3, 16)
 BANK_DEPOSIT_PRINCIPAL = 230000
 BANK_ANNUAL_INTEREST = 0.048
 
-# הגדרות עמוד
 st.set_page_config(page_title="Investment Tracker Pro V2", layout="wide")
 
-# עיצוב CSS מותאם ל-RTL וקריאות גבוהה
+# עיצוב RTL ושיפור ויזואלי
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;700&display=swap');
     html, body, [class*="css"] { font-family: 'Assistant', sans-serif; direction: rtl; text-align: right; }
-    .stMetric { background-color: #f0f2f6; padding: 15px; border-radius: 10px; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
-    div[data-testid="stMetricValue"] { color: #1f77b4; font-size: 1.8rem !important; }
+    .stMetric { background-color: #f8f9fb; padding: 15px; border-radius: 12px; border: 1px solid #e1e4e8; }
+    div[data-testid="stMetricValue"] { color: #2c3e50; font-size: 1.8rem !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -32,6 +32,21 @@ def get_fx_rate():
         r = requests.get(FX_API_URL, timeout=5).json()
         return r["rates"]["ILS"]
     except: return 3.7
+
+@st.cache_data(ttl=3600)
+def get_market_data():
+    # משיכת מדדים מובילים
+    tickers = {"S&P 500": "^GSPC", "Nasdaq": "^IXIC", "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD"}
+    data = {}
+    for name, sym in tickers.items():
+        try:
+            ticker = yf.Ticker(sym)
+            hist = ticker.history(period="1d")
+            price = hist['Close'].iloc[-1]
+            change = ((price - hist['Open'].iloc[-1]) / hist['Open'].iloc[-1]) * 100
+            data[name] = {"price": price, "change": change}
+        except: data[name] = {"price": 0, "change": 0}
+    return data
 
 @st.cache_data(ttl=600)
 def load_data(url):
@@ -58,64 +73,63 @@ def calc_logic(df, fx):
     df['Invested_Capital'] = df['Cum_DCA'] + df['Date'].apply(lambda d: BANK_DEPOSIT_PRINCIPAL if d >= BANK_DEPOSIT_START else 0)
     df['Profit'] = df['Portfolio_Value'] - df['Invested_Capital']
     df['Return_Pct'] = (df['Profit'] / df['Invested_Capital']) * 100
-    
-    # נרמול הגרף ל-100 לצורך השוואה למדדים (Baseline)
-    df['Norm_Portfolio'] = (df['Portfolio_Value'] / df['Portfolio_Value'].iloc[0]) * 100
     return df
 
-# --- UI MAIN ---
-st.title("📈 ניהול תיק השקעות אחוד - דור 2.0")
+# --- UI ---
+st.title("💰 דשבורד השקעות חכם")
 fx = get_fx_rate()
+m_data = get_market_data()
+
+# שורת מדדים עולמיים
+cols = st.columns(len(m_data))
+for i, (name, val) in enumerate(m_data.items()):
+    cols[i].metric(name, f"{val['price']:,.0f}", f"{val['change']:.2f}%")
+
+st.markdown("---")
 
 if "google.com" in SHEET_URL:
-    df = calc_logic(load_data(SHEET_URL), fx)
-    latest = df.iloc[-1]
+    raw_df = load_data(SHEET_URL)
+    if raw_df is not None:
+        df = calc_logic(raw_df, fx)
+        latest = df.iloc[-1]
 
-    # 1. מדדים מובילים (KPIs)
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("שווי כולל", f"₪{int(latest['Portfolio_Value']):,}")
-    c2.metric("רווח/הפסד נקי", f"₪{int(latest['Profit']):,}", f"{latest['Return_Pct']:.2f}%")
-    c3.metric("סה\"כ הון מושקע", f"₪{int(latest['Invested_Capital']):,}")
-    c4.metric("שער USD/ILS", f"{fx:.2f}")
+        # 1. סיכום תיק אישי
+        st.subheader("תמונת מצב התיק")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("שווי כולל", f"₪{int(latest['Portfolio_Value']):,}")
+        c2.metric("רווח/הפסד", f"₪{int(latest['Profit']):,}", f"{latest['Return_Pct']:.2f}%")
+        c3.metric("הון מושקע", f"₪{int(latest['Invested_Capital']):,}")
+        c4.metric("שער דולר", f"{fx:.2f}")
 
-    st.markdown("---")
+        # 2. פילוח נכסים
+        col_pie, col_txt = st.columns([2, 1])
+        with col_pie:
+            labels = ["IBKR", "Blink", "Kraken", "קרן אירית", "פיקדון בנקאי"]
+            values = [latest['IBKR_USD']*fx, latest['BLINK_USD']*fx, latest['KRAKEN_USD']*fx, latest['IRISH_ILS'], latest['Bank_Deposit']]
+            fig_pie = px.pie(names=labels, values=values, hole=0.5, title="חלוקת נכסים אחוזית",
+                             color_discrete_sequence=px.colors.qualitative.Safe)
+            st.plotly_chart(fig_pie, use_container_width=True)
+        
+        with col_txt:
+            st.subheader("שווי במטבע מקור")
+            st.info(f"**IBKR:** ${int(latest['IBKR_USD']):,}")
+            st.info(f"**Blink:** ${int(latest['BLINK_USD']):,}")
+            st.info(f"**Kraken:** ${int(latest['KRAKEN_USD']):,}")
+            st.info(f"**קרן אירית:** ₪{int(latest['IRISH_ILS']):,}")
+            st.info(f"**פיקדון:** ₪{int(latest['Bank_Deposit']):,}")
 
-    # 2. פילוח נכסים (Pie Chart)
-    col_pie, col_values = st.columns([2, 1])
-    
-    with col_pie:
-        st.subheader("חלוקת נכסים אחוזית")
-        labels = ["IBKR", "Blink", "Kraken", "קרן אירית", "פיקדון בנקאי"]
-        values = [latest['IBKR_USD']*fx, latest['BLINK_USD']*fx, latest['KRAKEN_USD']*fx, latest['IRISH_ILS'], latest['Bank_Deposit']]
-        fig_pie = px.pie(names=labels, values=values, color_discrete_sequence=px.colors.qualitative.Pastel, hole=0.4)
-        fig_pie.update_layout(direction='rtl')
-        st.plotly_chart(fig_pie, use_container_width=True)
+        # 3. גרף צמיחה
+        st.subheader("צמיחת התיק לאורך זמן")
+        fig_line = go.Figure()
+        fig_line.add_trace(go.Scatter(x=df['Date'], y=df['Portfolio_Value'], name='שווי תיק (₪)', line=dict(color='#1f77b4', width=4)))
+        fig_line.add_trace(go.Scatter(x=df['Date'], y=df['Invested_Capital'], name='הון מושקע (₪)', line=dict(color='#bdc3c7', dash='dash')))
+        fig_line.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        st.plotly_chart(fig_line, use_container_width=True)
 
-    with col_values:
-        st.subheader("שווי במטבע מקור")
-        st.write(f"**IBKR:** ${int(latest['IBKR_USD']):,}")
-        st.write(f"**Blink:** ${int(latest['BLINK_USD']):,}")
-        st.write(f"**Kraken:** ${int(latest['KRAKEN_USD']):,}")
-        st.write(f"**Irish:** ₪{int(latest['IRISH_ILS']):,}")
-        st.write(f"**Bank:** ₪{int(latest['Bank_Deposit']):,}")
-
-    st.markdown("---")
-
-    # 3. גרף השוואת ביצועים
-    st.subheader("ביצועי התיק אל מול הפקדות (באלפי ש\"ח)")
-    fig_line = go.Figure()
-    fig_line.add_trace(go.Scatter(x=df['Date'], y=df['Portfolio_Value'], name='שווי תיק', line=dict(color='#1f77b4', width=3)))
-    fig_line.add_trace(go.Scatter(x=df['Date'], y=df['Invested_Capital'], name='הון מושקע', line=dict(color='#ff7f0e', dash='dash')))
-    fig_line.update_layout(hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-    st.plotly_chart(fig_line, use_container_width=True)
-
-    # 4. פירוט שבועי נקי
-    st.subheader("היסטוריית נתונים")
-    table_df = df[['Date', 'Portfolio_Value', 'Profit', 'Return_Pct']].copy()
-    table_df['Portfolio_Value'] = table_df['Portfolio_Value'].apply(lambda x: f"₪{int(x):,}")
-    table_df['Profit'] = table_df['Profit'].apply(lambda x: f"₪{int(x):,}")
-    table_df['Return_Pct'] = table_df['Return_Pct'].map("{:.2f}%".format)
-    st.dataframe(table_df.sort_values('Date', ascending=False), use_container_width=True, hide_index=True)
-
-else:
-    st.warning("אנא הזן קישור CSV תקין.")
+        # 4. טבלה היסטורית
+        st.subheader("היסטוריה שבועית")
+        table_df = df[['Date', 'Portfolio_Value', 'Profit', 'Return_Pct']].copy()
+        table_df['Portfolio_Value'] = table_df['Portfolio_Value'].apply(lambda x: f"₪{int(x):,}")
+        table_df['Profit'] = table_df['Profit'].apply(lambda x: f"₪{int(x):,}")
+        table_df['Return_Pct'] = table_df['Return_Pct'].map("{:.2f}%".format)
+        st.dataframe(table_df.sort_values('Date', ascending=False), use_container_width=True, hide_index=True)
