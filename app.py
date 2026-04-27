@@ -19,7 +19,7 @@ DEPOSIT_2_INTEREST = 0.048
 
 st.set_page_config(page_title="My Investment Portfolio", layout="wide")
 
-# --- CSS ---
+# --- CSS (Cyber Dark Mode) ---
 st.markdown("""
     <style>
     .main { direction: rtl; }
@@ -31,15 +31,21 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 @st.cache_data(ttl=3600)
-def get_historical_fx_rates(dates_list):
-    """מושך שערי חליפין היסטוריים באופן אוטומטי"""
+def get_historical_fx_series(dates_list):
+    """מושך שער דולר היסטורי בצורה חסינה"""
     try:
-        start_date = min(dates_list)
-        end_date = max(dates_list) + timedelta(days=4)
-        # USDIILS=X הוא הטיקר לשער דולר שקל ב-Yahoo Finance
-        data = yf.download("ILS=X", start=start_date, end=end_date, progress=False)['Close']
-        # מחזיר סדרה של תאריכים ושערים
-        return data
+        start = min(dates_list) - timedelta(days=7)
+        end = max(dates_list) + timedelta(days=7)
+        # שימוש ב-USDILS=X (ישיר)
+        data = yf.download("USDILS=X", start=start, end=end, progress=False)
+        if data.empty: # ניסיון נוסף עם טיקר חלופי
+            data = yf.download("ILS=X", start=start, end=end, progress=False)
+        
+        # ניקוי Multi-index של yfinance
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+            
+        return data['Close']
     except:
         return None
 
@@ -51,19 +57,18 @@ def load_and_process(url):
         df = df.dropna(subset=['Date'])
         df['Date'] = pd.to_datetime(df['Date']).dt.date
         
-        # --- אוטומציה של שער החליפין ---
-        unique_dates = df['Date'].unique()
-        fx_data = get_historical_fx_rates(unique_dates)
+        # שליפת שערי חליפין
+        fx_series = get_historical_fx_series(df['Date'].tolist())
         
-        def get_rate_for_date(d):
+        def get_rate(d):
             try:
-                # מחפש את השער הכי קרוב לתאריך (למקרה של סופ"ש שבו אין מסחר)
-                return float(fx_data.asof(pd.Timestamp(d)))
-            except:
-                return 3.7 # Fallback במקרה של תקלה
+                val = fx_series.asof(pd.Timestamp(d))
+                # אם הערך הוא סביב 0.27, זה שקל לדולר - נהפוך אותו
+                if val < 1: return round(1/float(val), 3)
+                return round(float(val), 3)
+            except: return 3.75 # שער ממוצע כגיבוי אחרון
 
-        df['FX_Rate'] = df['Date'].apply(get_rate_for_date)
-        # -----------------------------------
+        df['FX_Rate'] = df['Date'].apply(get_rate)
 
         def sum_dca(val, fx_rate):
             if pd.isna(val) or val == "{}" or val == "": return 0
@@ -86,7 +91,9 @@ def load_and_process(url):
         df['Invested_Capital'] = df['Cum_DCA'] + df['Date'].apply(lambda d: DEPOSIT_2_PRINCIPAL if d >= DEPOSIT_2_START else DEPOSIT_1_PRINCIPAL)
         df['Return_Abs'] = df['Portfolio_Value'] - df['Invested_Capital']
         return df
-    except: return None
+    except Exception as e:
+        st.error(f"Error: {e}")
+        return None
 
 # --- UI ---
 st.title("🛡️ My Investment Portfolio")
@@ -97,14 +104,13 @@ if df is not None:
     range_choice = st.sidebar.selectbox("בחר טווח זמן לתצוגה:", ["Daily", "Weekly", "Monthly", "Yearly", "YTD"], index=1)
     
     latest = df.iloc[-1]
-    
-    # חישוב תאריכים לטווח
     range_map = {"Daily": 1, "Weekly": 7, "Monthly": 30, "Yearly": 365, "YTD": (latest['Date'] - date(latest['Date'].year, 1, 1)).days}
     start_date = latest['Date'] - timedelta(days=range_map[range_choice])
     
     filtered_df = df[df['Date'] >= start_date].copy()
     if filtered_df.empty: filtered_df = df.tail(2)
     
+    # חישוב תשואה
     start_val = filtered_df.iloc[0]['Portfolio_Value']
     range_return_ils = latest['Portfolio_Value'] - start_val
     range_return_pct = ((latest['Portfolio_Value'] / start_val) - 1) * 100
@@ -114,7 +120,7 @@ if df is not None:
     c1.metric("שווי כולל", f"₪{int(latest['Portfolio_Value']):,}")
     c2.metric(f"תשואה ({range_choice})", f"₪{int(range_return_ils):,}", f"{range_return_pct:.2f}%")
     c3.metric("רווח כולל", f"₪{int(latest['Return_Abs']):,}")
-    c4.metric("שער דולר (רציף)", f"{latest['FX_Rate']:.3f}")
+    c4.metric("שער USD/ILS", f"{latest['FX_Rate']:.3f}")
 
     st.markdown("---")
 
@@ -124,19 +130,23 @@ if df is not None:
     selected = st.multiselect("הוסף מדדים:", list(bench_options.keys()), default=["S&P 500"])
 
     fig_bench = go.Figure()
+    # נרמול התיק שלי
     my_norm = ((filtered_df['Portfolio_Value'] / start_val) - 1) * 100
     fig_bench.add_trace(go.Scatter(x=filtered_df['Date'], y=my_norm, name="התיק שלי", line=dict(color='#00d4ff', width=4)))
 
     if selected:
         for s in selected:
             try:
-                b_hist = yf.download(bench_options[s], start=start_date, progress=False)['Close']
-                if not b_hist.empty:
-                    b_norm = ((b_hist / b_hist.iloc[0]) - 1) * 100
-                    fig_bench.add_trace(go.Scatter(x=b_hist.index, y=b_norm, name=s, line=dict(width=1.5, dash='dot')))
+                b_data = yf.download(bench_options[s], start=start_date, progress=False)['Close']
+                # ניקוי Multi-index לגרף
+                if isinstance(b_data, pd.DataFrame): b_data = b_data.iloc[:, 0]
+                
+                if not b_data.empty:
+                    b_norm = ((b_data / b_data.iloc[0]) - 1) * 100
+                    fig_bench.add_trace(go.Scatter(x=b_data.index, y=b_norm, name=s, line=dict(width=1.5, dash='dot')))
             except: pass
 
-    fig_bench.update_layout(hovermode="x unified", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="#fff")
+    fig_bench.update_layout(hovermode="x unified", yaxis_title="תשואה %", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="#fff")
     st.plotly_chart(fig_bench, use_container_width=True)
 
     # פילוח
@@ -148,11 +158,11 @@ if df is not None:
         fig_p = px.pie(names=labels, values=vals, hole=0.5, color_discrete_sequence=['#003f5c', '#bc5090', '#ffa600', '#00ff41', '#ff6361'])
         st.plotly_chart(fig_p, use_container_width=True)
     with cp2:
-        st.info(f"**IBKR:** ${int(latest['IBKR_USD']):,}")
-        st.info(f"**Blink:** ${int(latest['BLINK_USD']):,}")
-        st.info(f"**Kraken:** ${int(latest['KRAKEN_USD']):,}")
-        st.info(f"**אירית:** ₪{int(latest['IRISH_ILS']):,}")
-        st.info(f"**פקדון:** ₪{int(latest['Bank_Val']):,}")
+        st.info(f"💵 **IBKR:** ${int(latest['IBKR_USD']):,}")
+        st.info(f"💵 **Blink:** ${int(latest['BLINK_USD']):,}")
+        st.info(f"₿ **Kraken:** ${int(latest['KRAKEN_USD']):,}")
+        st.info(f"🇮🇱 **אירית:** ₪{int(latest['IRISH_ILS']):,}")
+        st.info(f"🏦 **פקדון:** ₪{int(latest['Bank_Val']):,}")
 
     # יומן
     st.subheader("📅 יומן ביצועים")
